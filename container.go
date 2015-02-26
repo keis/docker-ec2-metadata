@@ -2,13 +2,14 @@ package main
 
 import (
 	"fmt"
-	log "github.com/cihub/seelog"
-	"github.com/fsouza/go-dockerclient"
-	"github.com/goamz/goamz/aws"
+	"log"
 	"regexp"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/fsouza/go-dockerclient"
+	"github.com/goamz/goamz/aws"
 )
 
 const (
@@ -79,7 +80,7 @@ func (t *ContainerService) RoleForIP(containerIP string) (*ContainerRole, error)
 	}
 
 	if info.RequiresRefresh() {
-		log.Infof("Refreshing role for container %s: role=%s session=%s", info.ShortContainerId, info.RoleArn, info.SessionName)
+		log.Printf("Refreshing role for container %s: role=%s session=%s", info.ShortContainerId, info.RoleArn, info.SessionName)
 		creds, err := AssumeRole(t.auth, info.RoleArn.String(), info.SessionName)
 
 		info.LastUpdated = time.Now()
@@ -110,7 +111,7 @@ func (t *ContainerService) containerForIP(containerIP string) (*ContainerInfo, e
 }
 
 func (t *ContainerService) syncContainers() {
-	log.Info("Synchronizing state with running docker containers")
+	log.Println("Synchronizing state with running docker containers")
 	apiContainers, err := t.docker.ListContainers(docker.ListContainersOptions{
 		All:    false, // only running containers
 		Size:   false, // do not need size information
@@ -120,7 +121,7 @@ func (t *ContainerService) syncContainers() {
 	})
 
 	if err != nil {
-		log.Error("Error listing running containers: ", err)
+		log.Println("Error listing running containers: ", err)
 		return
 	}
 
@@ -131,7 +132,7 @@ func (t *ContainerService) syncContainers() {
 		container, err := t.docker.InspectContainer(apiContainer.ID)
 
 		if err != nil {
-			log.Error("Error inspecting container: ", apiContainer.ID, ": ", err)
+			log.Println("Error inspecting container: ", apiContainer.ID, ": ", err)
 			continue
 		}
 
@@ -144,7 +145,7 @@ func (t *ContainerService) syncContainers() {
 			roleErr = fmt.Errorf("No role defined for container %s: image=%s", shortContainerId, container.Config.Image)
 		}
 
-		log.Infof("Container: id=%s image=%s role=%s", shortContainerId, container.Config.Image, roleArn)
+		log.Printf("Container: id=%s image=%s role=%s", shortContainerId, container.Config.Image, roleArn)
 
 		containerIPMap[containerIP] = &ContainerInfo{
 			ContainerId:      apiContainer.ID,

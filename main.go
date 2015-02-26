@@ -3,15 +3,20 @@ package main
 import (
 	"encoding/json"
 	"fmt"
-	"github.com/alecthomas/kingpin"
-	log "github.com/cihub/seelog"
-	"github.com/fsouza/go-dockerclient"
-	"github.com/goamz/goamz/aws"
 	"io"
+	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
+
+	"github.com/alecthomas/kingpin"
+	"github.com/fsouza/go-dockerclient"
+	"github.com/goamz/goamz/aws"
+	//"gopkg.in/natefinch/lumberjack.v2"
 )
 
 const (
@@ -84,32 +89,6 @@ func copyHeaders(dst, src http.Header) {
 	}
 }
 
-func configureLogging(verbose bool) {
-	minLevel := "info"
-
-	if verbose {
-		minLevel = "trace"
-	}
-
-	logger, err := log.LoggerFromConfigAsString(fmt.Sprintf(`
-<seelog minlevel="%s">
-    <outputs formatid="out">
-        <console />
-    </outputs>
-
-    <formats>
-        <format id="out" format="%%Date %%Time [%%LEVEL] %%Msg%%n" />
-    </formats>
-</seelog>
-`, minLevel))
-
-	if err != nil {
-		panic(err)
-	}
-
-	log.ReplaceLogger(logger)
-}
-
 func remoteIP(addr string) string {
 	index := strings.Index(addr, ":")
 
@@ -145,12 +124,12 @@ func logHandler(handler func(w http.ResponseWriter, r *http.Request)) func(w htt
 
 		defer func() {
 			if e := recover(); e != nil {
-				log.Critical("Panic in request handler: ", e)
+				log.Println("Panic in request handler: ", e)
 				logWriter.WriteHeader(http.StatusInternalServerError)
 			}
 
 			elapsed := time.Since(start)
-			log.Infof("%s \"%s %s %s\" %d %s", remoteIP(r.RemoteAddr), r.Method, r.URL.Path, r.Proto, logWriter.Status, elapsed)
+			log.Printf("%s \"%s %s %s\" %d %s", remoteIP(r.RemoteAddr), r.Method, r.URL.Path, r.Proto, logWriter.Status, elapsed)
 		}()
 
 		handler(logWriter, r)
@@ -181,7 +160,7 @@ func handleCredentials(apiVersion, subpath string, c *ContainerService, w http.R
 	resp, err := instanceServiceClient.RoundTrip(NewGET(baseUrl + "/" + apiVersion + "/meta-data/iam/security-credentials/"))
 
 	if err != nil {
-		log.Error("Error requesting creds path for API version ", apiVersion, ": ", err)
+		log.Println("Error requesting creds path for API version ", apiVersion, ": ", err)
 		w.WriteHeader(http.StatusInternalServerError)
 		return
 	} else if resp.StatusCode != http.StatusOK {
@@ -193,7 +172,7 @@ func handleCredentials(apiVersion, subpath string, c *ContainerService, w http.R
 	role, err := c.RoleForIP(clientIP)
 
 	if err != nil {
-		log.Error(clientIP, " ", err)
+		log.Println(clientIP, " ", err)
 		http.Error(w, "An unexpected error getting container role", http.StatusInternalServerError)
 		return
 	}
@@ -219,7 +198,7 @@ func handleCredentials(apiVersion, subpath string, c *ContainerService, w http.R
 		})
 
 		if err != nil {
-			log.Error("Error marshaling credentials: ", err)
+			log.Println("Error marshaling credentials: ", err)
 			w.WriteHeader(http.StatusInternalServerError)
 		} else {
 			w.Write(creds)
@@ -231,8 +210,19 @@ func main() {
 	kingpin.CommandLine.Help = "Docker container EC2 metadata service."
 	kingpin.Parse()
 
-	defer log.Flush()
-	configureLogging(*verboseOpt)
+	//l := &lumberjack.Logger{Filename: "logfile.log"}
+	//log.SetOutput(l)
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, syscall.SIGHUP)
+
+	/*
+		go func() {
+			for {
+				<-c
+				l.Rotate()
+			}
+		}()
+	*/
 
 	auth, err := aws.GetAuth("", "", "", time.Time{})
 
@@ -253,7 +243,7 @@ func main() {
 		proxyReq, err := http.NewRequest(r.Method, fmt.Sprintf("%s%s", baseUrl, r.URL.Path), r.Body)
 
 		if err != nil {
-			log.Error("Error creating proxy http request: ", err)
+			log.Println("Error creating proxy http request: ", err)
 			http.Error(w, "An unexpected error occurred communicating with Amazon", http.StatusInternalServerError)
 			return
 		}
@@ -262,7 +252,7 @@ func main() {
 		resp, err := instanceServiceClient.RoundTrip(proxyReq)
 
 		if err != nil {
-			log.Error("Error forwarding request to EC2 metadata service: ", err)
+			log.Println("Error forwarding request to EC2 metadata service: ", err)
 			http.Error(w, "An unexpected error occurred communicating with Amazon", http.StatusInternalServerError)
 			return
 		}
@@ -270,9 +260,9 @@ func main() {
 		copyHeaders(w.Header(), resp.Header)
 		w.WriteHeader(resp.StatusCode)
 		if _, err := io.Copy(w, resp.Body); err != nil {
-			log.Warn("Error copying response content from EC2 metadata service: ", err)
+			log.Println("Error copying response content from EC2 metadata service: ", err)
 		}
 	}))
 
-	log.Critical(http.ListenAndServe(*serverAddr, nil))
+	log.Println(http.ListenAndServe(*serverAddr, nil))
 }
