@@ -8,8 +8,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/awslabs/aws-sdk-go/aws"
 	"github.com/fsouza/go-dockerclient"
-	"github.com/goamz/goamz/aws"
 )
 
 const (
@@ -55,11 +55,11 @@ type ContainerService struct {
 	containerIdMap map[string]string // container id => container IP
 	docker         *docker.Client
 	defaultRoleArn RoleArn
-	auth           aws.Auth
+	auth           aws.CredentialsProvider
 	lock           sync.Mutex
 }
 
-func NewContainerService(docker *docker.Client, defaultRoleArn RoleArn, auth aws.Auth) *ContainerService {
+func NewContainerService(docker *docker.Client, defaultRoleArn RoleArn, auth aws.CredentialsProvider) *ContainerService {
 	return &ContainerService{
 		containerIPMap: make(map[string]*ContainerInfo),
 		containerIdMap: make(map[string]string),

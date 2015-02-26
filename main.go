@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/alecthomas/kingpin"
+	"github.com/awslabs/aws-sdk-go/aws"
 	"github.com/fsouza/go-dockerclient"
-	"github.com/goamz/goamz/aws"
 	//"gopkg.in/natefinch/lumberjack.v2"
 )
 
@@ -224,13 +224,8 @@ func main() {
 		}()
 	*/
 
-	auth, err := aws.GetAuth("", "", "", time.Time{})
-
-	if err != nil {
-		panic(err)
-	}
-
-	containerService := NewContainerService(dockerClient(), *defaultRole, auth)
+	creds := aws.DetectCreds("", "", "")
+	containerService := NewContainerService(dockerClient(), *defaultRole, creds)
 
 	// Proxy non-credentials requests to primary metadata service
 	http.HandleFunc("/", logHandler(func(w http.ResponseWriter, r *http.Request) {

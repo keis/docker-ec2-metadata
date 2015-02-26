@@ -2,10 +2,12 @@ package main
 
 import (
 	"errors"
-	"github.com/goamz/goamz/aws"
-	"github.com/goamz/goamz/sts"
+	"net/http"
 	"regexp"
 	"time"
+
+	"github.com/awslabs/aws-sdk-go/aws"
+	"github.com/awslabs/aws-sdk-go/gen/sts"
 )
 
 var (
@@ -64,14 +66,14 @@ func (t *RoleCredentials) ExpiredAt(at time.Time) bool {
 	return at.After(t.Expiration)
 }
 
-func AssumeRole(auth aws.Auth, roleArn, sessionName string) (*RoleCredentials, error) {
-	stsClient := sts.New(auth, aws.USEast)
-	resp, err := stsClient.AssumeRole(&sts.AssumeRoleParams{
-		DurationSeconds: 3600, // Max is 1 hour
-		ExternalId:      "",   // Empty string means not applicable
-		Policy:          "",   // Empty string means not applicable
-		RoleArn:         roleArn,
-		RoleSessionName: sessionName,
+func AssumeRole(auth aws.CredentialsProvider, roleArn, sessionName string) (*RoleCredentials, error) {
+	stsClient := sts.New(auth, "eu-west-1b", &http.Client{})
+	resp, err := stsClient.AssumeRole(&sts.AssumeRoleRequest{
+		DurationSeconds: aws.Integer(3600), // Max is 1 hour
+		ExternalID:      nil,               // Empty string means not applicable
+		Policy:          nil,               // Empty string means not applicable
+		RoleARN:         aws.String(roleArn),
+		RoleSessionName: aws.String(sessionName),
 	})
 
 	if err != nil {
@@ -79,9 +81,9 @@ func AssumeRole(auth aws.Auth, roleArn, sessionName string) (*RoleCredentials, e
 	}
 
 	return &RoleCredentials{
-		resp.Credentials.AccessKeyId,
-		resp.Credentials.SecretAccessKey,
-		resp.Credentials.SessionToken,
+		string(*resp.Credentials.AccessKeyID),
+		string(*resp.Credentials.SecretAccessKey),
+		string(*resp.Credentials.SessionToken),
 		resp.Credentials.Expiration,
 	}, nil
 }
