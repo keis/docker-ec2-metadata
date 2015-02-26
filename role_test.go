@@ -1,28 +1,36 @@
 package main
 
-import (
-	"github.com/stretchr/testify/assert"
-	"testing"
-)
+import "testing"
 
-func TestNewRoleArn(t *testing.T) {
-	assert := assert.New(t)
+func TestNewRoleARN(t *testing.T) {
+	tests := []struct {
+		arn  string
+		path string
+		role string
+		ok   bool
+	}{
+		{arn: "arn:aws:iam::123fail:role:fail", ok: false},
+		{arn: "arn:aws:iam::fail123:role:fail", ok: false},
+		{arn: "arn:aws:iam::faifail:role:fail", ok: false},
+		{arn: "arn:aws:iam::12345:role:fail", ok: false},
+		{arn: "arn:aws:iam::12345:role/testpath:fail", ok: false},
+		{arn: "arn:aws:iam::12345:role/testrole1", path: "/", role: "testrole1", ok: true},
+		{arn: "arn:aws:iam::12345:role/testpath/testrole2", path: "/testpath/", role: "testrole2", ok: true},
+	}
 
-	arn, err := NewRoleArn("arn:aws:iam::123456789012:role/test-role-name")
-	assert.Nil(err)
-	assert.Equal("test-role-name", arn.RoleName())
-	assert.Equal("/", arn.Path())
-	assert.Equal("123456789012", arn.AccountId())
-	assert.Equal("arn:aws:iam::123456789012:role/test-role-name", arn.String())
-}
-
-func TestNewRoleArnWithPath(t *testing.T) {
-	assert := assert.New(t)
-
-	arn, err := NewRoleArn("arn:aws:iam::123456789012:role/this/is/the/path/test-role-name")
-	assert.Nil(err)
-	assert.Equal("test-role-name", arn.RoleName())
-	assert.Equal("/this/is/the/path/", arn.Path())
-	assert.Equal("123456789012", arn.AccountId())
-	assert.Equal("arn:aws:iam::123456789012:role/this/is/the/path/test-role-name", arn.String())
+	for _, test := range tests {
+		r, err := NewRoleARN(test.arn)
+		if err != nil {
+			if test.ok {
+				t.Errorf("Failed evaluating regexp on '%s'", test.arn)
+			}
+			continue
+		}
+		if r.Path != test.path {
+			t.Errorf("Wanted path '%s' got '%s'", test.path, r.Path)
+		}
+		if r.Name != test.role {
+			t.Errorf("Wanted role '%s' got '%s'", test.role, r.Name)
+		}
+	}
 }
