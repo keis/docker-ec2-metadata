@@ -163,12 +163,13 @@ a specific role to use by setting the `IAM_ROLE` environment variable.
 
 Example: `IAM_ROLE=arn:aws:iam::123456789012:role/CONTAINER_ROLE_NAME`
 
-Note that the host machine’s instance profile must have permission to assume the given role.
+Note that the host machines instance profile must have permission to assume the given role.
 If not, the container will receive an error when requesting the credentials.
 
 # License
 
-The MIT License (MIT)
-Copyright (c) 2014 Cory Thomas
+The MIT License (MIT)  
+Copyright (c) 2014 Cory Thomas  
+Copyright (c) 2015 Nordcloud; Martin Akesson  
 
 See [LICENSE](LICENSE)

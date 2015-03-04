@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"regexp"
 	"strconv"
-	"time"
 )
 
 var (
@@ -42,15 +41,4 @@ func NewRoleARN(arn string) (*RoleARN, error) {
 		Name:      result[3],
 	}
 	return &ra, nil
-}
-
-type RoleCredentials struct {
-	AccessKey  string
-	SecretKey  string
-	Token      string
-	Expiration time.Time
-}
-
-func (r *RoleCredentials) Expired() bool {
-	return time.Now().After(r.Expiration)
 }

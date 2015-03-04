@@ -1,220 +1,81 @@
 package main
 
 import (
-	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
-	"regexp"
-	"strings"
 	"syscall"
-	"time"
 
-	"github.com/alecthomas/kingpin"
-	"github.com/awslabs/aws-sdk-go/aws"
-	"github.com/fsouza/go-dockerclient"
 	//"gopkg.in/natefinch/lumberjack.v2"
 )
 
-const (
-	baseUrl = "http://169.254.169.254" // no trailing slash '/'
-)
+// TODO
+// Get current zone from http://169.254.169.254/latest/meta-data/placement/availability-zone/
 
 var (
-	credsRegex *regexp.Regexp = regexp.MustCompile("^/(.+?)/meta-data/iam/security-credentials/(.*)$")
+// reInvalid matches char that is not valid in a STS role session name
+//reInvalid = regexp.MustCompile(`[^\w+=,.@-]`)
 
-	instanceServiceClient *http.Transport = &http.Transport{}
 )
 
-var (
-	defaultRole = RoleArnOpt(kingpin.
-			Flag("default-iam-role", "ARN of the role to use if the container does not specify a role.").
-			Short('r'))
-
-	serverAddr = kingpin.
-			Flag("server", "Interface and port to bind the server to.").
-			Default(":18000").
-			Short('s').
-			String()
-
-	verboseOpt = kingpin.
-			Flag("verbose", "Enable verbose output.").
-			Bool()
-)
-
-type MetadataCredentials struct {
-	Code            string
-	LastUpdated     time.Time
-	Type            string
-	AccessKeyId     string
-	SecretAccessKey string
-	Token           string
-	Expiration      time.Time
+type RoleMapper interface {
+	IPRole(string) *RoleARN
 }
 
-type RoleArnValue RoleArn
-
-func (t *RoleArnValue) Set(value string) error {
-	if len(value) > 0 {
-		arn, err := NewRoleArn(value)
-		*(*RoleArn)(t) = arn
-		return err
-	}
-
-	return nil
+type CredentialsMapper interface {
+	RoleCredentials(*RoleARN) *RoleCredentials
 }
 
-func (t *RoleArnValue) String() string {
-	return ""
+type appContext struct {
+	cMgr RoleMapper
+	rMgr CredentialsMapper
 }
 
-func RoleArnOpt(s kingpin.Settings) (target *RoleArn) {
-	target = new(RoleArn)
-	s.SetValue((*RoleArnValue)(target))
-	return
+type proxyHandler struct {
+	context     appContext
+	passThrough func(http.ResponseWriter, *http.Request) (int, error)
+	intercept   func(*appContext, http.ResponseWriter, *http.Request, string) (int, error)
 }
 
-func copyHeaders(dst, src http.Header) {
-	for k, _ := range dst {
-		dst.Del(k)
-	}
+func (p proxyHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	var status int
+	var err error
 
-	for k, v := range src {
-		vCopy := make([]string, len(v))
-		copy(vCopy, v)
-		dst[k] = vCopy
-	}
-}
-
-func remoteIP(addr string) string {
-	index := strings.Index(addr, ":")
-
-	if index < 0 {
-		return addr
+	r.URL.Scheme = "http"
+	r.URL.Host = awsMetaHost
+	match := reCredentials.FindStringSubmatch(r.URL.Path)
+	if match != nil {
+		status, err = p.intercept(&p.context, w, r, match[1])
 	} else {
-		return addr[:index]
+		status, err = p.passThrough(w, r)
 	}
-}
-
-type LogResponseWriter struct {
-	Wrapped http.ResponseWriter
-	Status  int
-}
-
-func (t *LogResponseWriter) Header() http.Header {
-	return t.Wrapped.Header()
-}
-
-func (t *LogResponseWriter) Write(d []byte) (int, error) {
-	return t.Wrapped.Write(d)
-}
-
-func (t *LogResponseWriter) WriteHeader(s int) {
-	t.Wrapped.WriteHeader(s)
-	t.Status = s
-}
-
-func logHandler(handler func(w http.ResponseWriter, r *http.Request)) func(w http.ResponseWriter, r *http.Request) {
-	return func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		logWriter := &LogResponseWriter{w, 200}
-
-		defer func() {
-			if e := recover(); e != nil {
-				log.Println("Panic in request handler: ", e)
-				logWriter.WriteHeader(http.StatusInternalServerError)
-			}
-
-			elapsed := time.Since(start)
-			log.Printf("%s \"%s %s %s\" %d %s", remoteIP(r.RemoteAddr), r.Method, r.URL.Path, r.Proto, logWriter.Status, elapsed)
-		}()
-
-		handler(logWriter, r)
-	}
-}
-
-func dockerClient() *docker.Client {
-	client, err := docker.NewClient("unix:///var/run/docker.sock")
-
 	if err != nil {
-		panic(err)
-	}
-
-	return client
-}
-
-func NewGET(path string) *http.Request {
-	r, err := http.NewRequest("GET", path, nil)
-
-	if err != nil {
-		panic(err)
-	}
-
-	return r
-}
-
-func handleCredentials(apiVersion, subpath string, c *ContainerService, w http.ResponseWriter, r *http.Request) {
-	resp, err := instanceServiceClient.RoundTrip(NewGET(baseUrl + "/" + apiVersion + "/meta-data/iam/security-credentials/"))
-
-	if err != nil {
-		log.Println("Error requesting creds path for API version ", apiVersion, ": ", err)
-		w.WriteHeader(http.StatusInternalServerError)
-		return
-	} else if resp.StatusCode != http.StatusOK {
-		w.WriteHeader(resp.StatusCode)
-		return
-	}
-
-	clientIP := remoteIP(r.RemoteAddr)
-	role, err := c.RoleForIP(clientIP)
-
-	if err != nil {
-		log.Println(clientIP, " ", err)
-		http.Error(w, "An unexpected error getting container role", http.StatusInternalServerError)
-		return
-	}
-
-	roleName := role.Arn.RoleName()
-
-	if len(subpath) == 0 {
-		w.Write([]byte(roleName))
-	} else if !strings.HasPrefix(subpath, roleName) || (len(subpath) > len(roleName) && subpath[len(roleName)-1] != '/') {
-		// An idiosyncrasy of the standard EC2 metadata service:
-		// Subpaths of the role name are ignored. So long as the correct role name is provided,
-		// it can be followed by a slash and anything after the slash is ignored.
-		w.WriteHeader(http.StatusNotFound)
-	} else {
-		creds, err := json.Marshal(&MetadataCredentials{
-			Code:            "Success",
-			LastUpdated:     role.LastUpdated,
-			Type:            "AWS-HMAC",
-			AccessKeyId:     role.Credentials.AccessKey,
-			SecretAccessKey: role.Credentials.SecretKey,
-			Token:           role.Credentials.Token,
-			Expiration:      role.Credentials.Expiration,
-		})
-
-		if err != nil {
-			log.Println("Error marshaling credentials: ", err)
-			w.WriteHeader(http.StatusInternalServerError)
-		} else {
-			w.Write(creds)
+		log.Printf("HTTP %d: %q", status, err)
+		switch status {
+		case http.StatusNotFound:
+			http.NotFound(w, r)
+			// And if we wanted a friendlier error page, we can
+			// now leverage our context instance - e.g.
+			// err := ah.renderTemplate(w, "http_404.tmpl", nil)
+		case http.StatusInternalServerError:
+			http.Error(w, http.StatusText(status), status)
+		default:
+			http.Error(w, http.StatusText(status), status)
 		}
 	}
 }
 
 func main() {
-	kingpin.CommandLine.Help = "Docker container EC2 metadata service."
-	kingpin.Parse()
+	var err error
+	var ctx = appContext{}
 
+	fmt.Println("Metaproxy")
 	//l := &lumberjack.Logger{Filename: "logfile.log"}
 	//log.SetOutput(l)
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, syscall.SIGHUP)
-
 	/*
 		go func() {
 			for {
@@ -224,40 +85,21 @@ func main() {
 		}()
 	*/
 
-	creds := aws.DetectCreds("", "", "")
-	containerService := NewContainerService(dockerClient(), *defaultRole, creds)
+	ctx.cMgr, err = NewDockerManager()
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	ctx.rMgr, err = NewRoleManager()
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	// Proxy non-credentials requests to primary metadata service
-	http.HandleFunc("/", logHandler(func(w http.ResponseWriter, r *http.Request) {
-		match := credsRegex.FindStringSubmatch(r.URL.Path)
-		if match != nil {
-			handleCredentials(match[1], match[2], containerService, w, r)
-			return
-		}
-
-		proxyReq, err := http.NewRequest(r.Method, fmt.Sprintf("%s%s", baseUrl, r.URL.Path), r.Body)
-
-		if err != nil {
-			log.Println("Error creating proxy http request: ", err)
-			http.Error(w, "An unexpected error occurred communicating with Amazon", http.StatusInternalServerError)
-			return
-		}
-
-		copyHeaders(proxyReq.Header, r.Header)
-		resp, err := instanceServiceClient.RoundTrip(proxyReq)
-
-		if err != nil {
-			log.Println("Error forwarding request to EC2 metadata service: ", err)
-			http.Error(w, "An unexpected error occurred communicating with Amazon", http.StatusInternalServerError)
-			return
-		}
-
-		copyHeaders(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		if _, err := io.Copy(w, resp.Body); err != nil {
-			log.Println("Error copying response content from EC2 metadata service: ", err)
-		}
-	}))
-
-	log.Println(http.ListenAndServe(*serverAddr, nil))
+	http.Handle("/", proxyHandler{
+		context:     ctx,
+		passThrough: passThrough,
+		intercept:   intercept,
+	})
+	log.Println(http.ListenAndServe("127.0.0.1:18000", nil))
 }
