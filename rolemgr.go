@@ -2,10 +2,10 @@ package main
 
 import (
 	"fmt"
-	"github.com/awslabs/aws-sdk-go/aws"
-	"github.com/awslabs/aws-sdk-go/gen/sts"
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/session"
+	"github.com/aws/aws-sdk-go/service/sts"
 	"log"
-	"net/http"
 	"sync"
 	"time"
 )
@@ -15,10 +15,10 @@ const (
 )
 
 type RoleCredentials struct {
-	AccessKey  string
-	SecretKey  string
-	Token      string
-	Expiration time.Time
+	AccessKeyId     string
+	SecretAccessKey string
+	Token           string
+	Expiration      time.Time
 }
 
 func (r *RoleCredentials) NeedRefresh() bool {
@@ -58,15 +58,14 @@ func (cm *CredentialMap) Set(k string, v *RoleCredentials) *RoleCredentials {
 }
 
 type RoleManager struct {
-	zone  string
-	iam   aws.CredentialsProvider
-	creds CredentialMap
+	session *session.Session
+	creds   CredentialMap
 }
 
 func NewRoleManager() (*RoleManager, error) {
 	mgr := &RoleManager{
-		iam:   aws.IAMCreds(),
-		creds: CredentialMap{data: make(map[string]RoleCredentials)},
+		session: session.New(),
+		creds:   CredentialMap{data: make(map[string]RoleCredentials)},
 	}
 
 	return mgr, nil
@@ -86,22 +85,22 @@ func (rm *RoleManager) RoleCredentials(r *RoleARN) *RoleCredentials {
 	}
 	log.Printf("Credentials request: role=%s\n", r)
 	sessionName := fmt.Sprintf("Proxy_%s", r.Name)
-	stsClient := sts.New(rm.iam, rm.zone, &http.Client{})
-	resp, err := stsClient.AssumeRole(&sts.AssumeRoleRequest{
-		DurationSeconds: aws.Integer(3600), // Max is 1 hour
-		ExternalID:      nil,               // Empty string means not applicable
-		Policy:          nil,               // Empty string means not applicable
-		RoleARN:         aws.String(r.String()),
+	stsClient := sts.New(rm.session, &aws.Config{Region: aws.String("eu-west-1")})
+	resp, err := stsClient.AssumeRole(&sts.AssumeRoleInput{
+		DurationSeconds: aws.Int64(3600), // Max is 1 hour
+		ExternalId:      nil,             // Empty string means not applicable
+		Policy:          nil,             // Empty string means not applicable
+		RoleArn:         aws.String(r.String()),
 		RoleSessionName: aws.String(sessionName),
 	})
 	if err != nil {
 		return cred
 	}
 	cred = &RoleCredentials{
-		string(*resp.Credentials.AccessKeyID),
+		string(*resp.Credentials.AccessKeyId),
 		string(*resp.Credentials.SecretAccessKey),
 		string(*resp.Credentials.SessionToken),
-		resp.Credentials.Expiration,
+		*resp.Credentials.Expiration,
 	}
 	return rm.creds.Set(r.String(), cred)
 }

@@ -101,5 +101,5 @@ func main() {
 		passThrough: passThrough,
 		intercept:   intercept,
 	})
-	log.Println(http.ListenAndServe("127.0.0.1:18000", nil))
+	log.Println(http.ListenAndServe("0.0.0.0:18000", nil))
 }
